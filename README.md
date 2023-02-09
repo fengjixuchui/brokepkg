@@ -10,9 +10,15 @@ Brokepkg is a LKM rootkit for Linux Kernels 2.6.x/3.x/4.x/5.x and ARM64, with su
 
 ## Tested on
 
+```bash
+$(head -1 /etc/os-release|tr -d '"'|cut -d= -f2): $(uname -r)
+```
+
+- **Ubuntu 22.04.1 LTS**: 5.17.0-1026-oem
 - **Arch linux**: 5.13.12-arch1-1
 - **Kali linux**: 5.10.0-kali3-amd64
 - **Linux mint**: 4.19.0-8-amd64
+- **Ubuntu 18.04.6 LTS**: 4.15.0-194-generic
 - **Debian 9(stretch)**: 4.9.0-15-amd64
 - **Ubuntu 16.04.6 LTS**: 4.4.0-142-generic
 
@@ -36,7 +42,7 @@ Brokepkg is a LKM rootkit for Linux Kernels 2.6.x/3.x/4.x/5.x and ARM64, with su
 <img src="https://i.ibb.co/Fb68jQ0/root.png">
 </p align="center">
 
-- Files or directories starting with the PREFIX become invisible;
+- Files or directories contain the **MAGIC_HIDE** become invisible;
 
 <p align="center">
 <img src="https://i.ibb.co/N6f5WVL/file-dir-hidden.png">
@@ -56,21 +62,11 @@ Brokepkg is a LKM rootkit for Linux Kernels 2.6.x/3.x/4.x/5.x and ARM64, with su
 
 ## Install
 
-### To install lkm, see [wiki page](https://github.com/R3tr074/brokepkg/wiki/install)
+To install the rootkit, see this [wiki page](https://github.com/R3tr074/brokepkg/wiki/Install#brokepkg-installation:)
 
-### To install client run this:
+## Usage
 
-```bash
-# client
-sudo apt install socat
-brokecli="https://git.io/JYAVw" # to 64 bits
-brokecli="https://git.io/JYAVK" # to 32 bits
-wget -q $brokecli -O brokecli
-chmod +x brokecli
-sudo ./brokecli
-```
-
-To view mini tutorial use go to [releases](https://github.com/R3tr074/brokepkg/releases/tag/0.8)
+You can see a usage manual [here](https://github.com/R3tr074/brokepkg/wiki/Usage)
 
 ## Uninstall
 

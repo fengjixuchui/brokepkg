@@ -15,8 +15,6 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
-#define MAX_TCP_PORTS 65535
-
 #if defined(CONFIG_X86_64) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0))
 #define SYSCALL_NAME(name) ("__x64_" name)
 #else
@@ -27,6 +25,14 @@
   { .name = (_name), .function = (_hook), .original = (_orig), }
 
 #define HOOK_N(_name, _hook, _orig) HOOK(SYSCALL_NAME(_name), _hook, _orig)
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+#define ftrace_regs pt_regs
+static __always_inline struct pt_regs *ftrace_get_regs(
+    struct ftrace_regs *fregs) {
+  return fregs;
+}
+#endif
 
 /*
  * There are two ways of preventing vicious recursive loops when hooking:

